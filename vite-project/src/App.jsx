@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
 import { Code2, Play, Sun, Moon, Cpu, ChevronRight } from "lucide-react";
+import HintSystem from "./components/HintSystem";
+import DryRun from "./components/DryRun";
+import ThinkAloud from "./components/ThinkAloud";
 import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
@@ -21,6 +24,76 @@ const LANG_EXTS = {
   java: [java()],
   cpp: [cpp()],
 };
+
+// Renders markdown-ish AI text: code blocks, bold, bullets, plain paragraphs
+function RichText({ text, dark, accentColor }) {
+  const muted = dark ? "#6b7db3" : "#5a6a99";
+  const codeBg = dark ? "#0a0e1a" : "#e8eeff";
+  const codeColor = accentColor || (dark ? "#2dd4bf" : "#0d9488");
+  const borderColor = dark ? "#1e2d5a" : "#c8d4f0";
+
+  const blocks = [];
+  const codeBlockRe = /```(\w*)\n?([\s\S]*?)```/g;
+  let last = 0, match;
+  while ((match = codeBlockRe.exec(text)) !== null) {
+    if (match.index > last) blocks.push({ type: "text", content: text.slice(last, match.index) });
+    blocks.push({ type: "code", lang: match[1], content: match[2].trim() });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) blocks.push({ type: "text", content: text.slice(last) });
+
+  const renderInline = (str) =>
+    str.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((s, i) => {
+      if (s.startsWith("**") && s.endsWith("**"))
+        return <strong key={i} className="font-bold" style={{ color: codeColor }}>{s.slice(2, -2)}</strong>;
+      if (s.startsWith("`") && s.endsWith("`"))
+        return <code key={i} className="px-1.5 py-0.5 rounded text-xs font-mono"
+          style={{ background: codeBg, color: codeColor, border: `1px solid ${borderColor}` }}>{s.slice(1, -1)}</code>;
+      return s;
+    });
+
+  const renderTextBlock = (content, bi) =>
+    content.split("\n").filter(l => l.trim()).map((line, i) => {
+      const isBullet = /^[-*•]\s/.test(line.trim());
+      const isNum = /^\d+\.\s/.test(line.trim());
+      const isHeading = /^#{1,3}\s/.test(line.trim());
+      if (isHeading) return (
+        <p key={`${bi}-${i}`} className="font-bold text-sm mt-3 mb-1" style={{ color: codeColor }}>
+          {renderInline(line.replace(/^#{1,3}\s/, ""))}
+        </p>
+      );
+      if (isBullet || isNum) return (
+        <div key={`${bi}-${i}`} className="flex gap-2 items-start my-1">
+          <span className="mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: codeColor, marginTop: "6px" }} />
+          <span className="text-sm leading-relaxed">{renderInline(line.replace(/^[-*•]\s|\d+\.\s/, ""))}</span>
+        </div>
+      );
+      return <p key={`${bi}-${i}`} className="text-sm leading-relaxed my-1">{renderInline(line)}</p>;
+    });
+
+  return (
+    <div className="space-y-2">
+      {blocks.map((b, i) =>
+        b.type === "code" ? (
+          <div key={i} className="rounded-xl overflow-hidden mt-2" style={{ border: `1px solid ${borderColor}` }}>
+            {b.lang && (
+              <div className="px-3 py-1 text-xs font-mono flex items-center gap-1.5"
+                style={{ background: borderColor, color: muted }}>
+                <Code2 size={11} /> {b.lang}
+              </div>
+            )}
+            <pre className="p-3 text-xs overflow-x-auto leading-relaxed"
+              style={{ background: codeBg, color: codeColor, fontFamily: "inherit" }}>
+              {b.content}
+            </pre>
+          </div>
+        ) : (
+          <div key={i}>{renderTextBlock(b.content, i)}</div>
+        )
+      )}
+    </div>
+  );
+}
 
 export default function App() {
   const [dark, setDark] = useState(true);
@@ -167,9 +240,20 @@ export default function App() {
             <div className="p-5 border-b" style={{ borderColor: d ? "#1e2d5a" : "#c8d4f0" }}>
               <div className="flex items-start gap-2">
                 <Code2 size={16} className="mt-0.5 flex-shrink-0" style={{ color: accent }} />
-                <div>
-                  <p className="text-sm font-semibold leading-relaxed">{questionData.problem}</p>
-                  {questionData.example && <p className={`text-xs mt-2 ${muted}`}>Example: {questionData.example}</p>}
+                <div className="flex-1">
+                  <RichText text={questionData.problem} dark={d} />
+                  {questionData.example && (
+                    <div className="mt-3 pl-3 border-l-2" style={{ borderColor: "#0d9488" }}>
+                      <p className={`text-xs uppercase tracking-widest mb-1 font-mono`} style={{color: muted}}>Example</p>
+                      <RichText text={questionData.example} dark={d} />
+                    </div>
+                  )}
+                  {questionData.constraints && (
+                    <div className="mt-3 pl-3 border-l-2" style={{ borderColor: "#3d6bff" }}>
+                      <p className={`text-xs uppercase tracking-widest mb-1 font-mono`} style={{color: muted}}>Constraints</p>
+                      <RichText text={questionData.constraints} dark={d} />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -182,16 +266,28 @@ export default function App() {
                 style={{ fontSize: "13px" }} />
             </div>
 
-            <div className="p-4 flex items-center gap-3">
-              <button onClick={checkSolution} disabled={loading}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all duration-200 hover:scale-105 active:scale-95 disabled:opacity-40"
-                style={{ background: solved ? "linear-gradient(135deg,#059669,#10b981)" : `linear-gradient(135deg, ${accent}, #7c3dff)`, boxShadow: `0 0 14px ${solved ? "#059669" : accent}55` }}>
-                {loading && questionData ? (
-                  <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Checking…</>
-                ) : (
-                  <><Play size={14} /> {solved ? "Solved ✓" : "Submit"}</>
-                )}
-              </button>
+            <div className="p-4 space-y-4">
+              {/* Action buttons row */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <button onClick={checkSolution} disabled={loading}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all duration-200 hover:scale-105 active:scale-95 disabled:opacity-40"
+                  style={{ background: solved ? "linear-gradient(135deg,#059669,#10b981)" : `linear-gradient(135deg, ${accent}, #7c3dff)`, boxShadow: `0 0 14px ${solved ? "#059669" : accent}55` }}>
+                  {loading && questionData ? (
+                    <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Checking…</>
+                  ) : (
+                    <><Play size={14} /> {solved ? "Solved ✓" : "Submit"}</>
+                  )}
+                </button>
+                <HintSystem questionData={questionData} currentCode={code} aiReady={aiReady} dark={d} RichText={RichText} />
+              </div>
+              {/* Dry run section */}
+              <div className="pt-3 border-t" style={{ borderColor: d ? "#1e2d5a" : "#c8d4f0" }}>
+                <DryRun questionData={questionData} currentCode={code} aiReady={aiReady} dark={d} RichText={RichText} />
+              </div>
+              {/* Think aloud section */}
+              <div className="pt-3 border-t" style={{ borderColor: d ? "#1e2d5a" : "#c8d4f0" }}>
+                <ThinkAloud questionData={questionData} currentCode={code} aiReady={aiReady} dark={d} RichText={RichText} />
+              </div>
             </div>
           </div>
         )}
@@ -207,7 +303,7 @@ export default function App() {
             <p className={`text-xs uppercase tracking-widest mb-2 ${solved ? "text-emerald-400" : muted}`}>
               {solved ? "✓ Correct" : "Feedback"}
             </p>
-            <p className="whitespace-pre-wrap">{feedback}</p>
+            <RichText text={feedback} dark={d} />
           </div>
         )}
       </div>
